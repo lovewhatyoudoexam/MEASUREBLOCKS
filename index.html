@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>語法積木工廠 - 普特融合探索小特師專用</title>
+    <!-- 使用更穩定的 CDN 來源 -->
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+    <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #f0f9ff;
+            user-select: none;
+            touch-action: manipulation; /* 優化觸控體驗 */
+        }
+        .block-shadow {
+            box-shadow: 4px 4px 0px rgba(0,0,0,0.2);
+            transition: all 0.2s;
+        }
+        .block-shadow:active {
+            box-shadow: 1px 1px 0px rgba(0,0,0,0.2);
+            transform: translate(3px, 3px);
+        }
+        .selected-glow {
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.8), 4px 4px 0px rgba(0,0,0,0.2);
+            transform: scale(1.05);
+            border: 2px solid #FFD700;
+            z-index: 10;
+        }
+        @keyframes bounce-short {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        .animate-bounce-short {
+            animation: bounce-short 0.5s ease-in-out;
+        }
+        /* 說話時的動畫效果 */
+        @keyframes speaking-pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        .speaking {
+            animation: speaking-pulse 0.3s ease-in-out;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        // 桌子 SVG 圖示元件
+        const TableIcon = () => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="#8B4513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 20v-8"/>
+                <path d="M21 20v-8"/>
+                <path d="M3 12h18"/>
+                <path d="M3 12v-2a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2"/>
+            </svg>
+        );
+
+        // 題目資料庫
+        const QUESTIONS = [
+            { id: 1, noun: "沙發", measure: "張", quantity: "一", imageHint: "🛋️" },
+            { id: 2, noun: "畫", measure: "幅", quantity: "一", imageHint: "🖼️" },
+            { id: 3, noun: "桌子", measure: "張", quantity: "一", imageHint: "custom:table" }, // 改用自定義圖示
+            { id: 4, noun: "花", measure: "束", quantity: "一", imageHint: "💐" },
+            { id: 5, noun: "圍巾", measure: "條", quantity: "一", imageHint: "🧣" },
+            { id: 6, noun: "眼鏡", measure: "副", quantity: "一", imageHint: "👓" },
+            { id: 7, noun: "手套", measure: "副", quantity: "一", imageHint: "🧤" },
+            { id: 8, noun: "衣服", measure: "件", quantity: "一", imageHint: "👕" },
+        ];
+
+        // 混淆選項
+        const DISTRACTORS = {
+            measures: ["個", "隻", "本", "顆"],
+            quantities: ["兩", "三"]
+        };
+
+        const App = () => {
+            const [currentQIndex, setCurrentQIndex] = useState(0);
+            const [slots, setSlots] = useState({ quantity: null, measure: null, noun: null });
+            const [inventory, setInventory] = useState([]);
+            const [feedback, setFeedback] = useState({ type: "", msg: "" });
+            const [score, setScore] = useState(0);
+            const [isCompleted, setIsCompleted] = useState(false);
+            const [selectedItem, setSelectedItem] = useState(null);
+
+            const currentQuestion = QUESTIONS[currentQIndex];
+
+            // --- 語音合成功能 (Text to Speech) ---
+            const speak = useCallback((text, rate = 0.8) => {
+                if ('speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.lang = 'zh-TW';
+                    utterance.rate = rate;
+                    utterance.pitch = 1;
+                    window.speechSynthesis.speak(utterance);
+                }
+            }, []);
+
+            // 初始化
+            useEffect(() => {
+                resetLevel();
+            }, [currentQIndex]);
+
+            const resetLevel = () => {
+                setSlots({ quantity: null, measure: null, noun: null });
+                setFeedback({ type: "", msg: "" });
+                setSelectedItem(null);
+                
+                const q = QUESTIONS[currentQIndex];
+                
+                // 1. 必備積木
+                let items = [
+                    { id: `q-${q.quantity}`, text: q.quantity, type: "quantity" },
+                    { id: `m-${q.measure}`, text: q.measure, type: "measure" },
+                    { id: `n-${q.noun}`, text: q.noun, type: "noun" }
+                ];
+
+                // 2. 干擾項
+                const wrongMeasure = DISTRACTORS.measures.find(m => m !== q.measure) || "個";
+                items.push({ id: `m-wrong`, text: wrongMeasure, type: "measure" });
+                
+                if (Math.random() > 0.5) {
+                    items.push({ id: `q-wrong`, text: "兩", type: "quantity" });
+                }
+
+                // 洗牌
+                items = items.sort(() => Math.random() - 0.5);
+                setInventory(items);
+            };
+
+            // --- 互動邏輯 ---
+
+            const handleInventoryClick = (item) => {
+                speak(item.text);
+                if (selectedItem && selectedItem.id === item.id) {
+                    setSelectedItem(null);
+                } else {
+                    setSelectedItem(item);
+                    setFeedback({ type: "info", msg: `聽到了嗎？這是「${item.text}」` });
+                }
+            };
+
+            const handleSlotClick = (targetSlotType) => {
+                if (slots[targetSlotType]) {
+                    speak(slots[targetSlotType].text);
+                    if (!selectedItem) {
+                        returnBlock(targetSlotType);
+                        return;
+                    }
+                }
+
+                if (selectedItem) {
+                    if (selectedItem.type === targetSlotType) {
+                        placeItem(selectedItem, targetSlotType);
+                    } else {
+                        showError("哎呀！顏色形狀不對喔！");
+                        speak("形狀不對喔");
+                    }
+                } 
+            };
+
+            const placeItem = (item, targetSlotType) => {
+                if (slots[targetSlotType]) {
+                    setInventory(prev => [...prev, slots[targetSlotType]]);
+                }
+                setSlots(prev => ({ ...prev, [targetSlotType]: item }));
+                setInventory(prev => prev.filter(i => i.id !== item.id));
+                setSelectedItem(null);
+                setFeedback({ type: "", msg: "" });
+            };
+
+            const returnBlock = (type) => {
+                const item = slots[type];
+                if (!item) return;
+                setSlots(prev => ({ ...prev, [type]: null }));
+                setInventory(prev => [...prev, item]);
+            };
+
+            const handleDragStart = (e, item) => {
+                speak(item.text);
+                setSelectedItem(item);
+                e.dataTransfer.setData("item", JSON.stringify(item));
+            };
+
+            const handleDrop = (e, targetSlotType) => {
+                e.preventDefault();
+                const itemData = JSON.parse(e.dataTransfer.getData("item"));
+                if (itemData.type !== targetSlotType) {
+                    showError("哎呀！顏色形狀不對喔！");
+                    speak("形狀不對喔");
+                    return;
+                }
+                placeItem(itemData, targetSlotType);
+            };
+
+            const handleDragOver = (e) => e.preventDefault();
+
+            const showError = (msg) => {
+                setFeedback({ type: "error", msg });
+                setTimeout(() => setFeedback({ type: "", msg: "" }), 2000);
+            };
+
+            const checkAnswer = () => {
+                const q = currentQuestion;
+                if (!slots.quantity || !slots.measure || !slots.noun) {
+                    setFeedback({ type: "warning", msg: "還沒拼完喔！加油！" });
+                    speak("還沒拼完喔");
+                    return;
+                }
+
+                if (slots.noun.text === q.noun && 
+                    slots.measure.text === q.measure && 
+                    slots.quantity.text === q.quantity) {
+                    
+                    const fullSentence = `${slots.quantity.text}${slots.measure.text}${slots.noun.text}`;
+                    
+                    setFeedback({ type: "success", msg: "太棒了！答對了！🎉" });
+                    speak(fullSentence);
+
+                    setTimeout(() => {
+                        if (currentQIndex < QUESTIONS.length - 1) {
+                            setScore(s => s + 10);
+                            setCurrentQIndex(prev => prev + 1);
+                        } else {
+                            setScore(s => s + 10);
+                            setIsCompleted(true);
+                            speak("恭喜你！全部完成了！");
+                        }
+                    }, 2500);
+                } else {
+                    showError("再試試看，好像哪裡怪怪的？");
+                    speak("再試試看");
+                }
+            };
+
+            const restartGame = () => {
+                setCurrentQIndex(0);
+                setScore(0);
+                setIsCompleted(false);
+                resetLevel();
+            };
+
+            // 渲染提示圖片的輔助函式
+            const renderHintImage = (q) => {
+                if (q.imageHint === "custom:table") {
+                    return <TableIcon />;
+                }
+                return <div className="text-6xl mb-2 filter drop-shadow-sm">{q.imageHint}</div>;
+            };
+
+            // --- 元件渲染 ---
+
+            const Slot = ({ type, label, colorClass, value }) => (
+                <div 
+                    className={`
+                        w-24 h-32 md:w-32 md:h-40 
+                        border-4 border-dashed rounded-xl 
+                        flex flex-col items-center justify-center 
+                        transition-all duration-300 relative cursor-pointer
+                        ${value ? 'border-solid border-gray-300 bg-white' : `border-gray-300 ${colorClass.bg}`}
+                        ${selectedItem && selectedItem.type === type && !value ? 'animate-pulse border-yellow-400' : ''}
+                    `}
+                    onDragOver={handleDragOver}
+                    onDrop={(e) => handleDrop(e, type)}
+                    onClick={() => handleSlotClick(type)}
+                >
+                    <span className={`absolute -top-8 text-lg font-bold ${colorClass.text}`}>
+                        {label}
+                    </span>
+
+                    {value ? (
+                        <div className={`
+                            w-20 h-20 md:w-28 md:h-28 
+                            rounded-lg flex items-center justify-center 
+                            text-3xl md:text-4xl font-bold text-white shadow-lg
+                            ${colorClass.block}
+                        `}>
+                            {value.text}
+                            <span className="absolute bottom-1 right-1 text-xs opacity-50">🔈</span>
+                        </div>
+                    ) : (
+                        <div className="text-gray-400 text-sm text-center px-2">
+                            {selectedItem && selectedItem.type === type ? "點這裡放入" : "請放入"}
+                        </div>
+                    )}
+                </div>
+            );
+
+            const Block = ({ item }) => {
+                let colorClass = "";
+                if (item.type === "quantity") colorClass = "bg-pink-500 hover:bg-pink-400";
+                else if (item.type === "measure") colorClass = "bg-blue-500 hover:bg-blue-400";
+                else if (item.type === "noun") colorClass = "bg-green-500 hover:bg-green-400";
+
+                const isSelected = selectedItem && selectedItem.id === item.id;
+
+                return (
+                    <div
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, item)}
+                        onClick={() => handleInventoryClick(item)}
+                        className={`
+                            w-20 h-20 md:w-24 md:h-24 m-2 relative
+                            rounded-xl block-shadow cursor-pointer
+                            flex items-center justify-center
+                            text-3xl font-bold text-white
+                            transform transition-transform
+                            ${colorClass}
+                            ${isSelected ? 'selected-glow' : 'hover:scale-105'}
+                        `}
+                    >
+                        {item.text}
+                        <span className="absolute top-1 right-1 text-[10px] opacity-70">🔈</span>
+                    </div>
+                );
+            };
+
+            if (isCompleted) {
+                return (
+                    <div className="min-h-screen flex flex-col items-center justify-center bg-yellow-100 p-4">
+                        <div className="text-8xl mb-6 animate-bounce-short">🏆</div>
+                        <h1 className="text-4xl font-bold text-yellow-800 mb-4">恭喜完成！</h1>
+                        <p className="text-xl text-yellow-700 mb-8">所有的量詞積木都找對了！</p>
+                        <div className="text-3xl font-bold text-pink-600 mb-8 bg-white px-8 py-4 rounded-xl shadow-sm">
+                            得分：{score}
+                        </div>
+                        <button 
+                            onClick={restartGame}
+                            className="px-8 py-4 bg-blue-500 text-white rounded-full text-xl font-bold shadow-lg hover:bg-blue-600 active:scale-95 transition"
+                        >
+                            再玩一次
+                        </button>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen flex flex-col max-w-4xl mx-auto p-4 pb-20">
+                    <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm mb-6">
+                        <div className="flex items-center gap-2">
+                            <span className="hidden md:inline bg-yellow-400 text-white px-3 py-1 rounded-full font-bold text-sm">L3 課文應用</span>
+                            <h1 className="text-xl md:text-2xl font-bold text-gray-700">語法積木工廠</h1>
+                        </div>
+                        <div className="flex gap-4 text-lg font-bold text-gray-600">
+                            <span>第 {currentQIndex + 1} / {QUESTIONS.length} 題</span>
+                            <span className="text-pink-500">⭐ {score}</span>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col items-center mb-8">
+                        <div className="text-gray-500 mb-2 font-bold">請拼出圖片的正確說法：</div>
+                        <div className="bg-white p-6 rounded-3xl shadow-md border-2 border-green-100 flex flex-col items-center w-full max-w-md">
+                            {/* 使用自定義渲染函式 */}
+                            <div className="flex justify-center items-center h-20 mb-2">
+                                {renderHintImage(currentQuestion)}
+                            </div>
+                            <div className="text-2xl font-bold text-gray-800">{currentQuestion.noun}</div>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-center items-end gap-1 md:gap-4 mb-8">
+                        <Slot type="quantity" label="數量" value={slots.quantity} colorClass={{bg: "bg-pink-50", text: "text-pink-500", block: "bg-pink-500"}} />
+                        <div className="text-4xl text-gray-300 pb-10 font-light">+</div>
+                        <Slot type="measure" label="量詞" value={slots.measure} colorClass={{bg: "bg-blue-50", text: "text-blue-500", block: "bg-blue-500"}} />
+                        <div className="text-4xl text-gray-300 pb-10 font-light">+</div>
+                        <Slot type="noun" label="名詞" value={slots.noun} colorClass={{bg: "bg-green-50", text: "text-green-500", block: "bg-green-500"}} />
+                    </div>
+
+                    <div className="h-10 flex justify-center items-center mb-2">
+                        {feedback.msg && (
+                            <div className={`
+                                px-4 py-2 rounded-full font-bold text-md md:text-lg animate-bounce-short text-center
+                                ${feedback.type === 'error' ? 'bg-red-100 text-red-600' : 
+                                  feedback.type === 'success' ? 'bg-green-100 text-green-600' : 
+                                  'bg-blue-50 text-blue-700 border border-blue-200'}
+                            `}>
+                                {feedback.msg}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex justify-center mb-6">
+                        <button 
+                            onClick={checkAnswer}
+                            className={`
+                                text-white text-xl font-bold py-3 px-12 rounded-full shadow-lg transform transition active:scale-95
+                                ${slots.quantity && slots.measure && slots.noun ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-gray-300 cursor-not-allowed'}
+                            `}
+                        >
+                            {slots.quantity && slots.measure && slots.noun ? '✨ 檢查答案' : '請先放入積木'}
+                        </button>
+                    </div>
+
+                    <div className="flex-1 bg-white rounded-xl shadow-inner p-4 border-t-4 border-gray-100">
+                        <div className="text-center text-gray-400 mb-2 font-bold text-sm">
+                            {selectedItem ? '👇 請點擊上方的格子放入' : '👇 點擊文字可以聽聲音喔'}
+                        </div>
+                        <div className="flex flex-wrap justify-center gap-2">
+                            {inventory.map((item) => (
+                                <Block key={item.id} item={item} />
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
